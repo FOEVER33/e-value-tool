@@ -1,57 +1,80 @@
-from flask import Flask, render_template_string, request
+import gradio as gr
 
-app = Flask(__name__)
+# E值计算逻辑
+def calculate_e_value(rank_home, rank_away, odds_win, odds_draw, odds_lose):
+    try:
+        rank_diff = rank_home - rank_away
+        prob_win = 0.45 + 0.0053 * rank_diff
+        min_odds = min(odds_win, odds_draw, odds_lose)
+        e_value = round(prob_win * min_odds, 3)
 
-html = """
-<!DOCTYPE html>
-<html>
-<head>
-    <title>竞彩E值推荐工具</title>
-    <style>
-        body { font-family: Arial, sans-serif; margin: 40px; }
-        input, button { padding: 8px; margin: 5px; }
-        .result { margin-top: 20px; font-weight: bold; }
-    </style>
-</head>
-<body>
-    <h2>竞彩E值推荐工具（输入排名与赔率）</h2>
-    <form method="post">
-        主队排名: <input type="number" name="home_rank" required>
-        客队排名: <input type="number" name="away_rank" required><br>
-        最低赔率: <input type="number" step="0.01" name="min_odds" required><br>
-        <button type="submit">计算E值并给出建议</button>
-    </form>
-    {% if result %}
-    <div class="result">
-        计算结果：<br>
-        排名差 = {{ rank_diff }}<br>
-        E值 = {{ e_value }}<br>
-        策略建议：{{ strategy }}
-    </div>
-    {% endif %}
-</body>
-</html>
-"""
-
-@app.route("/", methods=["GET", "POST"])
-def index():
-    result = None
-    rank_diff = e_value = strategy = None
-    if request.method == "POST":
-        home_rank = int(request.form["home_rank"])
-        away_rank = int(request.form["away_rank"])
-        min_odds = float(request.form["min_odds"])
-        rank_diff = home_rank - away_rank
-        e_value = round((0.45 + 0.0053 * rank_diff) * min_odds, 3)
-        if e_value >= 1.0:
-            strategy = "✅ 正期望，可下注"
+        if e_value >= 1:
+            suggestion = "✅ 投注该方向"
+            color = "#d4edda"
         elif e_value >= 0.93:
-            strategy = "❌ 放弃此场"
+            suggestion = "⚠️ 放弃该场"
+            color = "#fff3cd"
         else:
-            strategy = "🔄 反向投注（选对面）"
-        result = True
-    return render_template_string(html, result=result, rank_diff=rank_diff,
-                                  e_value=e_value, strategy=strategy)
+            suggestion = "🔄 反向投注（选对面）"
+            color = "#f8d7da"
 
+        return rank_diff, e_value, suggestion, color
+    except:
+        return 0, 0.0, "输入有误", "#f8d7da"
+
+# 历史记录
+history = []
+
+def batch_process(data):
+    results = []
+    for row in data:
+        if any(x is None for x in row) or len(row) != 5:
+            continue
+        r1, r2, o1, o2, o3 = row
+        diff, ev, sug, color = calculate_e_value(r1, r2, o1, o2, o3)
+        results.append([r1, r2, o1, o2, o3, diff, ev, sug])
+        history.append([r1, r2, o1, o2, o3, diff, ev, sug])
+    return results
+
+def get_history():
+    return history[::-1][:20]  # 最近20条
+
+with gr.Blocks(css=".gr-table td {text-align: center}") as demo:
+    gr.Markdown("""
+    # ⚽ 竞彩 E 值投注推荐工具（多场批量版）
+    输入多场比赛数据，获取每场投注建议（带颜色提示）
+    - 支持手机适配
+    - 输入：主队排名、客队排名、胜、平、负三项赔率
+    """)
+
+    with gr.Row():
+        input_table = gr.Dataframe(
+            headers=["主队排名", "客队排名", "胜赔率", "平赔率", "负赔率"],
+            datatype=["number", "number", "number", "number", "number"],
+            row_count=5,
+            col_count=(5, "fixed"),
+            interactive=True,
+            label="输入比赛数据（可增加行）"
+        )
+
+    btn = gr.Button("计算投注建议")
+
+    output_table = gr.Dataframe(
+        headers=["主队排名", "客队排名", "胜赔率", "平赔率", "负赔率", "排名差", "E值", "建议"],
+        label="计算结果（带建议）",
+        interactive=False
+    )
+
+    history_btn = gr.Button("查看最近历史记录（最多20条）")
+    history_output = gr.Dataframe(
+        headers=["主队排名", "客队排名", "胜赔率", "平赔率", "负赔率", "排名差", "E值", "建议"],
+        label="历史记录",
+        interactive=False
+    )
+
+    btn.click(fn=batch_process, inputs=input_table, outputs=output_table)
+    history_btn.click(fn=get_history, outputs=history_output)
+
+# 启动
 if __name__ == "__main__":
-    app.run()
+    demo.launch()
